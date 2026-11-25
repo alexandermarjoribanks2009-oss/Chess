@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#111318"><title>Mahoraga Chess</title>
+<style>
+:root{color-scheme:dark;--bg:#111318;--panel:#1b1e26;--gold:#d6a84f;--muted:#a9acb5}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top,#292b32,#101116 65%);color:#f5f1e8;font:15px system-ui,-apple-system,sans-serif;padding:18px 12px 36px}
+main{max-width:620px;margin:auto}.top{text-align:center}.eyebrow{letter-spacing:.25em;color:var(--gold);font-size:11px;font-weight:800}.title{font-size:36px;letter-spacing:.12em;margin:4px 0}.sub{color:var(--muted);margin:0 0 16px}
+.panel{background:#1b1e26;border:1px solid #39343a;border-radius:16px;padding:14px;margin:12px 0;box-shadow:0 12px 35px #0005}
+.status{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px}.status strong{font-size:14px}.level{color:var(--gold);font-size:12px;font-weight:800}
+#board{display:grid;grid-template-columns:repeat(8,1fr);border:3px solid #65513a;border-radius:5px;overflow:hidden;touch-action:manipulation}
+.sq{aspect-ratio:1;display:flex;align-items:center;justify-content:center;position:relative;font-family:"Arial Unicode MS",serif;font-size:clamp(27px,8.3vw,49px);padding:0;border:0;color:#151515}
+.light{background:#ead9b8}.dark{background:#98734e}.sq.sel{background:#d7bd58}.sq.target:after{content:"";position:absolute;width:23%;height:23%;border-radius:50%;background:#263e2c99}.sq.capture:after{content:"";position:absolute;inset:4px;border:4px solid #263e2c99;border-radius:50%}
+.whitepiece{color:#fffdf5;text-shadow:1px 1px 2px #222,-1px -1px 1px #333}.blackpiece{color:#171717;text-shadow:0 1px #fff8}
+.coords{position:absolute;bottom:2px;right:4px;font:9px system-ui;color:#59452f}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.statbox{background:#12141a;border-radius:10px;padding:10px}.statbox small{display:block;color:var(--muted);font-size:11px}.statbox b{font-size:19px;color:var(--gold)}
+.wheel{height:9px;background:#343640;border-radius:20px;overflow:hidden;margin:9px 0}.wheel>div{height:100%;width:0;background:linear-gradient(90deg,#98703a,#f1d17b);transition:width .3s}
+button.action{border:1px solid #62543e;background:#282a32;color:#f5f1e8;border-radius:10px;padding:11px 13px;font-weight:650;font-size:14px}
+button.primary{background:#b8893c;color:#15120d;border-color:#d6a84f}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+#log{max-height:115px;overflow:auto;color:#d7d1c6;font:13px ui-monospace,monospace;line-height:1.7}.note{color:var(--muted);font-size:12px;line-height:1.5}.thinking{color:var(--gold)}
+@media(min-width:520px){body{padding-top:28px}.sq{font-size:48px}}
+</style></head>
+<body><main>
+<header class="top"><div class="eyebrow">THE ADAPTATION CURSE</div><div class="title">MAHORAGA</div><p class="sub">A chess opponent that learns during the fight.</p></header>
+<section class="panel">
+ <div class="status"><strong id="status">Your move · White</strong><span class="level" id="level">ADAPTATION 0 / 5</span></div>
+ <div id="board" aria-label="Chessboard"></div>
+ <div class="actions"><button class="action" id="undo">Undo</button><button class="action" id="restart">Restart encounter</button></div>
+</section>
+<section class="panel">
+ <div class="grid">
+  <div class="statbox"><small>ADAPTATION STAGE</small><b id="stage">Dormant</b></div>
+  <div class="statbox"><small>ENGINE DEPTH</small><b id="depth">1 ply</b></div>
+ </div>
+ <div class="wheel"><div id="progress"></div></div>
+ <div id="learning" class="note">The wheel is still. Make your first move.</div>
+</section>
+<section class="panel"><strong>Battle record</strong><div id="log">No moves yet.</div></section>
+<p class="note">This is a prototype opponent, not a grandmaster engine. It uses legal chess rules and a small search engine. Its strength rises as it detects repeated piece choices and tactical patterns. Your game history stays in this browser tab; refreshing resets the encounter.</p>
+</main>
+<script type="module">
+import { Chess } from 'https://cdn.jsdelivr.net/npm/chess.js@1.0.0/+esm';
+const glyph={wk:'♔',wq:'♕',wr:'♖',wb:'♗',wn:'♘',wp:'♙',bk:'♚',bq:'♛',br:'♜',bb:'♝',bn:'♞',bp:'♟'};
+let game=new Chess(), selected=null, history=[], humanMoves=[], adapt=0, busy=false, moveLog=[];
+const $=id=>document.getElementById(id);
+const pieceValue={p:100,n:320,b:335,r:500,q:900,k:20000};
+const files='abcdefgh';
+function render(){
+ const board=$('board');board.innerHTML='';
+ const rows=game.board();
+ rows.forEach((row,r)=>row.forEach((p,c)=>{
+  const sq=files[c]+(8-r), el=document.createElement('button');
+  el.className='sq '+((r+c)%2?'dark':'light')+(selected===sq?' sel':'');
+  el.setAttribute('aria-label',sq+(p?' '+p.color+p.type:''));el.dataset.square=sq;
+  if(p){el.textContent=glyph[p.color+p.type];el.classList.add(p.color==='w'?'whitepiece':'blackpiece')}
+  if(c===7){const coord=document.createElement('span');coord.className='coords';coord.textContent=8-r;el.append(coord)}
+  if(r===7){const coord=document.createElement('span');coord.className='coords';coord.style.left='4px';coord.style.right='auto';coord.textContent=files[c];el.append(coord)}
+  if(selected){const moves=game.moves({square:selected,verbose:true});if(moves.some(m=>m.to===sq))el.classList.add(p?'capture':'target')}
+  el.addEventListener('click',()=>tap(sq));board.append(el);
+ }));
+ $('status').textContent=game.isGameOver()?(game.isCheckmate()?'Checkmate. '+(game.turn()==='w'?'Mahoraga':'You')+' win.':'Draw.'):(busy?'Mahoraga is calculating…':game.turn()==='w'?'Your move · White': 'Mahoraga to move');
+ $('level').textContent=`ADAPTATION ${adapt} / 5`;
+ $('stage').textContent=['Dormant','Observing','Adapting','Countering','Evolving','Complete'][adapt];
+ $('depth').textContent=(1+adapt)+' ply';
+ $('progress').style.width=(adapt*20)+'%';
+ $('learning').textContent=adapt===0?'The wheel is still. Mahoraga is observing your first moves.':`The wheel has turned ${adapt} time${adapt===1?'':'s'}. Mahoraga is adjusting its aggression and search depth.`;
+ $('log').textContent=moveLog.length?moveLog.join('   '):'No moves yet.';
+}
+function tap(sq){
+ if(busy||game.isGameOver()||game.turn()!=='w')return;
+ if(selected){
+  const legal=game.moves({square:selected,verbose:true}).filter(m=>m.to===sq);
+  if(legal.length){let promotion=legal.find(m=>m.promotion==='q');const move=game.move({from:selected,to:sq,promotion:promotion?'q':undefined});history.push(game.fen());humanMoves.push(move);moveLog.push(move.san);selected=null;learn(move);render();setTimeout(botMove,160);return}
+ }
+ const p=game.get(sq);selected=p&&p.color==='w'?sq:null;render();
+}
+function learn(move){
+ // Adapt to repeated piece choices and recurring destination files.
+ const recent=humanMoves.slice(-6), types=recent.map(m=>m.piece), filesUsed=recent.map(m=>m.to[0]);
+ const repeatedType=types.length>=4&&types.filter(t=>t===move.piece).length>=3;
+ const repeatedFile=filesUsed.length>=4&&filesUsed.filter(f=>f===move.to[0]).length>=3;
+ const tactical=move.captured||move.san.includes('+');
+ if((repeatedType||repeatedFile||tactical)&&adapt<5){adapt++;moveLog.push(`◉ Wheel turns: ${repeatedType?'piece pattern':repeatedFile?'file pattern':'tactical pressure'} detected`)}
+}
+function evaluate(){
+ if(game.isCheckmate())return game.turn()==='w'?-999999:999999;
+ if(game.isDraw())return 0;
+ let score=0;const b=game.board();
+ for(let r=0;r<8;r++)for(let c=0;c<8;c++){const p=b[r][c];if(!p)continue;let v=pieceValue[p.type];const advance=p.color==='w'?6-r:r-1;if(p.type==='p')v+=advance*7;if(p.type==='n'||p.type==='b')v+= (3.5-Math.abs(3.5-c))*5;score+=(p.color==='b'?v:-v)}
+ // Small aggression bonus for attacks and checks.
+ if(game.isCheck())score+=game.turn()==='w'?35:-35;
+ return score;
+}
+function minimax(depth,alpha,beta){
+ if(depth===0||game.isGameOver())return evaluate();
+ const moves=game.moves({verbose:true});
+ if(game.turn()==='b'){
+  let best=-Infinity;
+  for(const m of moves){game.move(m);let val=minimax(depth-1,alpha,beta);game.undo();best=Math.max(best,val);alpha=Math.max(alpha,best);if(beta<=alpha)break}
+  return best;
+ }else{
+  let best=Infinity;
+  for(const m of moves){game.move(m);let val=minimax(depth-1,alpha,beta);game.undo();best=Math.min(best,val);beta=Math.min(beta,best);if(beta<=alpha)break}
+  return best;
+ }
+}
+function botMove(){
+ if(game.isGameOver())return;
+ busy=true;render();
+ setTimeout(()=>{
+  const depth=Math.min(3,1+adapt), moves=game.moves({verbose:true});let scored=[];
+  for(const m of moves){game.move(m);let val=minimax(depth-1,-Infinity,Infinity);game.undo();
+   // Early stages deliberately add noise; later stages become more calculating.
+   const noise=(Math.random()-.5)*(adapt===0?700:adapt===1?350:adapt===2?170:adapt===3?75:20);
+   const aggression=(m.captured?65:0)+(m.san.includes('+')?45:0)+(m.piece==='q'?4:0);
+   scored.push({m,score:val+noise+aggression});
+  }
+  scored.sort((a,b)=>b.score-a.score);
+  const chosen=scored[0].m;const played=game.move({from:chosen.from,to:chosen.to,promotion:chosen.promotion||'q'});
+  moveLog.push('Mahoraga: '+played.san);busy=false;selected=null;render();
+ },80);
+}
+$('undo').onclick=()=>{if(busy||!game.history().length)return;game.undo();if(game.turn()==='b')game.undo();humanMoves=humanMoves.slice(0,Math.max(0,humanMoves.length-1));moveLog=moveLog.slice(0,Math.max(0,moveLog.length-2));adapt=Math.max(0,adapt-1);selected=null;render()};
+$('restart').onclick=()=>{game=new Chess();selected=null;history=[];humanMoves=[];adapt=0;busy=false;moveLog=[];render()};
+render();
+</script></body></html>
